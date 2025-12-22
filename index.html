@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>在线测试 · 国际疗愈师培训项目题库</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header class="app-header">
+    <div class="brand">
+      <h1>在线测试</h1>
+      <p class="sub">题库来源：国际疗愈师培训项目（PDF）</p>
+    </div>
+  </header>
+
+  <main class="container">
+    <section id="setup" class="card">
+      <h2>开始设置</h2>
+      <div class="grid">
+        <label class="field">
+          <span>出题数量</span>
+          <input id="count" type="number" min="1" value="20" />
+        </label>
+        <label class="field">
+          <span>题目类型</span>
+          <select id="qtype">
+            <option value="all" selected>单选 + 多选</option>
+            <option value="single">仅单选</option>
+            <option value="multiple">仅多选</option>
+          </select>
+        </label>
+        <label class="field checkbox">
+          <input id="shuffle" type="checkbox" checked />
+          <span>随机抽题</span>
+        </label>
+        <label class="field checkbox">
+          <input id="instant" type="checkbox" />
+          <span>即时判题（每题提交后显示对错）</span>
+        </label>
+      </div>
+      <div class="actions">
+        <button id="startBtn" class="primary">开始测试</button>
+      </div>
+      <p class="note">
+        说明：多选题需要把所有正确选项选全才算对；不会因为多选错选而“部分得分”。
+      </p>
+    </section>
+
+    <section id="quiz" class="card hidden">
+      <div class="topbar">
+        <div class="progress">
+          <span id="progressText">第 1 题 / 20 题</span>
+          <div class="bar"><div id="barFill"></div></div>
+        </div>
+        <div class="pill" id="typePill">单选</div>
+      </div>
+
+      <div id="questionBox" class="question"></div>
+      <form id="optionsBox" class="options"></form>
+
+      <div id="feedback" class="feedback hidden"></div>
+
+      <div class="actions split">
+        <button id="prevBtn" type="button">上一题</button>
+        <button id="submitBtn" type="button" class="primary">提交本题</button>
+        <button id="nextBtn" type="button">下一题</button>
+      </div>
+    </section>
+
+    <section id="result" class="card hidden">
+      <h2>成绩</h2>
+      <div class="score">
+        <div class="big" id="scoreBig">0%</div>
+        <div class="meta">
+          <div>得分：<span id="scoreRaw">0/0</span></div>
+          <div>正确率：<span id="scorePct">0%</span></div>
+        </div>
+      </div>
+
+      <details class="review">
+        <summary>查看错题与解析（显示正确答案）</summary>
+        <div id="reviewList"></div>
+      </details>
+
+      <div class="actions">
+        <button id="restartBtn">再来一套</button>
+      </div>
+    </section>
+  </main>
+
+  <footer class="app-footer">
+    <span>本页面为本地静态网页（无需后端）。</span>
+  </footer>
+
+  <script src="script.js"></script>
+</body>
+</html>
