@@ -178,6 +178,14 @@ function escapeHtml(str){
 
 function wire(){
   $('startBtn').addEventListener('click', () => {
+  if(!BANK || BANK.length === 0){
+      const isFile = (location && location.protocol === 'file:');
+      alert(isFile
+        ? '题库未加载：你是用 file:// 方式直接打开了网页，浏览器会拦截读取 questions.json。\n\n解决方法：\n1) 上传到 GitHub Pages（推荐）；或\n2) 用本地小服务器打开（例如：在该目录运行 `python -m http.server 8000`，再访问 http://localhost:8000）。'
+        : '题库未加载，请稍后刷新页面重试。');
+      return;
+    }
+
     const count = Math.max(1, parseInt($('count').value || '20', 10));
     const qtype = $('qtype').value;
     const shuffle = $('shuffle').checked;
@@ -246,6 +254,15 @@ function wire(){
 }
 
 (async function main(){
-  await loadBank();
+  // 先绑定事件，避免题库加载失败时按钮“完全没反应”
   wire();
+
+  const statusEl = document.getElementById('loadStatus');
+  try{
+    await loadBank();
+    if(statusEl) statusEl.textContent = `题库已加载：${BANK.length} 题`;
+  }catch(e){
+    console.error(e);
+    if(statusEl) statusEl.textContent = '题库加载失败（本地 file:// 打开会被浏览器拦截）。';
+  }
 })();
