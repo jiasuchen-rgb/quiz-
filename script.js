@@ -8,7 +8,76 @@ let state = {
   count: 20,
 };
 
+// -------- Wrong-set (错题集) helpers --------
+const WRONG_KEY = 'uniheal_wrong_uids_v1';
+function loadWrongSet(){
+  try{
+    const raw = localStorage.getItem(WRONG_KEY);
+    if(!raw) return new Set();
+    const arr = JSON.parse(raw);
+    if(Array.isArray(arr)) return new Set(arr.map(n => parseInt(n,10)).filter(n => Number.isFinite(n)));
+    return new Set();
+  }catch(_e){
+    return new Set();
+  }
+}
+function saveWrongSet(set){
+  try{
+    const arr = Array.from(set.values()).filter(n => Number.isFinite(n));
+    localStorage.setItem(WRONG_KEY, JSON.stringify(arr));
+  }catch(_e){}
+}
+function clearWrongSet(){
+  try{ localStorage.removeItem(WRONG_KEY); }catch(_e){}
+}
+function updateWrongUI(){
+  const btn = $('wrongBtn');
+  const clearBtn = $('clearWrongBtn');
+  if(!btn) return;
+  const n = loadWrongSet().size;
+  btn.textContent = `错题集（${n}）`;
+  btn.disabled = n === 0;
+  if(clearBtn) clearBtn.disabled = n === 0;
+}
+
 const $ = (id) => document.getElementById(id);
+
+// -------- Random helpers (better-than-sort(Math.random)) --------
+function randInt(max){
+  // return integer in [0, max)
+  if(max <= 0) return 0;
+  if(window.crypto && crypto.getRandomValues){
+    const buf = new Uint32Array(1);
+    crypto.getRandomValues(buf);
+    return buf[0] % max;
+  }
+  return Math.floor(Math.random() * max);
+}
+function fisherYates(arr){
+  for(let i = arr.length - 1; i > 0; i--){
+    const j = randInt(i + 1);
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+}
+function letter(i){
+  return String.fromCharCode('A'.charCodeAt(0) + i);
+}
+// Shuffle options and remap answer keys (A/B/...) accordingly.
+function shuffleOptionsAndAnswer(q){
+  const opts = q.options.map(o => ({...o})); // clone
+  fisherYates(opts);
+
+  const mapOldToNew = {};
+  opts.forEach((o, idx) => {
+    const newKey = letter(idx);
+    mapOldToNew[o.key] = newKey;
+    o.key = newKey;
+  });
+
+  const newAns = (q.answer || []).map(k => mapOldToNew[k]).filter(Boolean);
+  return { ...q, options: opts, answer: newAns };
+}
 
 function uniqueSorted(arr){
   return Array.from(new Set(arr)).sort();
@@ -24,19 +93,29 @@ async function loadBank(){
   BANK = await res.json();
 }
 
-function pickQuestions({count, qtype, shuffle}){
-  let pool = BANK;
-  if(qtype !== 'all') pool = BANK.filter(q => q.type === qtype);
+function pickQuestionsFrom(basePool, {count, qtype, shuffle}){
+  let pool = basePool || [];
+  if(qtype !== 'all') pool = pool.filter(q => q.type === qtype);
   if(pool.length === 0) throw new Error('题库为空或筛选后无题目。');
 
   let chosen = [...pool];
-  if(shuffle) chosen.sort(()=>Math.random()-0.5);
+  // Use Fisher–Yates for an unbiased shuffle
+  if(shuffle) fisherYates(chosen);
   chosen = chosen.slice(0, Math.min(count, chosen.length));
 
-  return chosen.map(q => ({
-    ...q,
-    // add per-quiz randomize options if needed later
-  }));
+  // When shuffle is on, also randomize option order and remap answers.
+  return chosen.map(q => {
+    const base = {
+      ...q,
+      options: (q.options || []).map(o => ({...o})),
+      answer: (q.answer || []).slice(),
+    };
+    return shuffle ? shuffleOptionsAndAnswer(base) : base;
+  });
+}
+
+function pickQuestions(opts){
+  return pickQuestionsFrom(BANK, opts);
 }
 
 function show(el, on){ el.classList.toggle('hidden', !on); }
@@ -163,6 +242,17 @@ function finish(){
     review.appendChild(div);
   });
 
+  // update wrong-set: add wrong/unanswered, remove those answered correctly
+  const wrongSet = loadWrongSet();
+  QUIZ.forEach(q => {
+    const rec = state.submitted[q.uid];
+    const ok = rec?.correct === true;
+    if(ok) wrongSet.delete(q.uid);
+    else wrongSet.add(q.uid);
+  });
+  saveWrongSet(wrongSet);
+  updateWrongUI();
+
   show($('quiz'), false);
   show($('result'), true);
 }
@@ -177,35 +267,69 @@ function escapeHtml(str){
 }
 
 function wire(){
-  $('startBtn').addEventListener('click', () => {
-  if(!BANK || BANK.length === 0){
-      const isFile = (location && location.protocol === 'file:');
-      alert(isFile
-        ? '题库未加载：你是用 file:// 方式直接打开了网页，浏览器会拦截读取 questions.json。\n\n解决方法：\n1) 上传到 GitHub Pages（推荐）；或\n2) 用本地小服务器打开（例如：在该目录运行 `python -m http.server 8000`，再访问 http://localhost:8000）。'
-        : '题库未加载，请稍后刷新页面重试。');
-      return;
+    function ensureBankLoaded(){
+      if(!BANK || BANK.length === 0){
+        const isFile = (location && location.protocol === 'file:');
+        alert(isFile
+          ? '题库未加载：你是用 file:// 方式直接打开了网页，浏览器会拦截读取 questions.json。\n\n解决办法：\n1）把本页面放到 GitHub Pages；或\n2）在该目录运行 `python -m http.server 8000`，再访问 http://localhost:8000。'
+          : '题库未加载，请稍后刷新页面重试。');
+        return false;
+      }
+      return true;
     }
 
-    const count = Math.max(1, parseInt($('count').value || '20', 10));
-    const qtype = $('qtype').value;
-    const shuffle = $('shuffle').checked;
-    state.instant = $('instant').checked;
-    state.count = count;
+    function startWithPool(pool){
+      if(!ensureBankLoaded()) return;
 
-    try{
-      QUIZ = pickQuestions({count, qtype, shuffle});
-    }catch(e){
-      alert(e.message || String(e));
-      return;
+      const count = Math.max(1, parseInt($('count').value || '20', 10));
+      const qtype = $('qtype').value;
+      const shuffle = $('shuffle').checked;
+      state.instant = $('instant').checked;
+      state.count = count;
+
+      try{
+        QUIZ = pickQuestionsFrom(pool, {count, qtype, shuffle});
+      }catch(e){
+        alert(e.message || String(e));
+        return;
+      }
+      state.idx = 0;
+      state.submitted = {};
+
+      show($('setup'), false);
+      show($('result'), false);
+      show($('quiz'), true);
+      renderQuestion();
     }
-    state.idx = 0;
-    state.submitted = {};
 
-    show($('setup'), false);
-    show($('result'), false);
-    show($('quiz'), true);
-    renderQuestion();
-  });
+    $('startBtn').addEventListener('click', () => startWithPool(BANK));
+
+    $('wrongBtn').addEventListener('click', () => {
+      if(!ensureBankLoaded()) return;
+      const wrongSet = loadWrongSet();
+      if(wrongSet.size === 0){
+        alert('错题集为空。\n\n提示：做完一套测试后，做错/未作答的题会自动加入错题集。');
+        updateWrongUI();
+        return;
+      }
+      const pool = BANK.filter(q => wrongSet.has(q.uid));
+      startWithPool(pool);
+    });
+
+    $('clearWrongBtn').addEventListener('click', () => {
+      const n = loadWrongSet().size;
+      if(n === 0){
+        alert('错题集已经是空的。');
+        return;
+      }
+      if(confirm(`确定要清空错题集吗？（将删除本机浏览器保存的 ${n} 条错题记录）`)){
+        clearWrongSet();
+        updateWrongUI();
+        alert('已清空错题集。');
+      }
+    });
+
+    updateWrongUI();
 
   $('submitBtn').addEventListener('click', submitCurrent);
 
@@ -261,6 +385,7 @@ function wire(){
   try{
     await loadBank();
     if(statusEl) statusEl.textContent = `题库已加载：${BANK.length} 题`;
+    updateWrongUI();
   }catch(e){
     console.error(e);
     if(statusEl) statusEl.textContent = '题库加载失败（本地 file:// 打开会被浏览器拦截）。';
