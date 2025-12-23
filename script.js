@@ -103,15 +103,12 @@ function pickQuestionsFrom(basePool, {count, qtype, shuffle}){
   if(shuffle) fisherYates(chosen);
   chosen = chosen.slice(0, Math.min(count, chosen.length));
 
-  // When shuffle is on, also randomize option order and remap answers.
-  return chosen.map(q => {
-    const base = {
-      ...q,
-      options: (q.options || []).map(o => ({...o})),
-      answer: (q.answer || []).slice(),
-    };
-    return shuffle ? shuffleOptionsAndAnswer(base) : base;
-  });
+  // Keep answer keys stable (do NOT shuffle option order).
+  return chosen.map(q => ({
+    ...q,
+    options: (q.options || []).map(o => ({...o})),
+    answer: (q.answer || []).slice(),
+  }));
 }
 
 function pickQuestions(opts){
