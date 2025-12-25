@@ -93,6 +93,114 @@ async function loadBank(){
   BANK = await res.json();
 }
 
+
+// ===== Non-repeating cycle (normal mode only) =====
+const CYCLE_KEY_PREFIX = 'quiz_cycle_remaining_v1_';
+const CYCLE_META_KEY_PREFIX = 'quiz_cycle_meta_v1_';
+
+function bankSignatureFor(pool){
+  // Lightweight signature so we can reset the cycle if the question bank changes.
+  try{
+    const uids = (pool || []).map(q => q.uid).filter(v => typeof v === 'number');
+    const n = uids.length;
+    const min = n ? Math.min(...uids) : 0;
+    const max = n ? Math.max(...uids) : 0;
+    return `${n}:${min}:${max}`;
+  }catch(_e){
+    return String((pool || []).length || 0);
+  }
+}
+
+function loadCycle(qtype, eligiblePool){
+  const key = CYCLE_KEY_PREFIX + qtype;
+  const metaKey = CYCLE_META_KEY_PREFIX + qtype;
+
+  const sigNow = bankSignatureFor(eligiblePool);
+  let meta = {};
+  try{ meta = JSON.parse(localStorage.getItem(metaKey) || '{}'); }catch(_e){ meta = {}; }
+
+  let remaining = null;
+  try{ remaining = JSON.parse(localStorage.getItem(key) || 'null'); }catch(_e){ remaining = null; }
+
+  const eligibleUids = eligiblePool.map(q => q.uid);
+
+  const needsReset = !Array.isArray(remaining) || meta.sig !== sigNow;
+
+  if(needsReset){
+    remaining = eligibleUids.slice();
+    // Shuffle once at the start of a cycle for better randomness across sessions.
+    fisherYates(remaining);
+    try{
+      localStorage.setItem(metaKey, JSON.stringify({sig: sigNow, ts: Date.now()}));
+      localStorage.setItem(key, JSON.stringify(remaining));
+    }catch(_e){}
+    return remaining;
+  }
+
+  // Sync: remove uids no longer eligible; add any newly-eligible uids.
+  const eligibleSet = new Set(eligibleUids);
+  remaining = remaining.filter(uid => eligibleSet.has(uid));
+  const remainingSet = new Set(remaining);
+  for(const uid of eligibleUids){
+    if(!remainingSet.has(uid)) remaining.push(uid);
+  }
+
+  try{ localStorage.setItem(key, JSON.stringify(remaining)); }catch(_e){}
+  return remaining;
+}
+
+function saveCycle(qtype, remaining){
+  const key = CYCLE_KEY_PREFIX + qtype;
+  try{ localStorage.setItem(key, JSON.stringify(remaining)); }catch(_e){}
+}
+
+function pickQuestionsNonRepeating(basePool, {count, qtype, shuffle}){
+  let pool = basePool || [];
+  if(qtype !== 'all') pool = pool.filter(q => q.type === qtype);
+  if(pool.length === 0) throw new Error('题库为空或筛选后无题目。');
+
+  // Load remaining uids for this qtype cycle
+  let remaining = loadCycle(qtype, pool).slice(); // work on a copy
+  if(remaining.length === 0){
+    // Completed a cycle; reset and continue
+    remaining = pool.map(q => q.uid);
+    fisherYates(remaining);
+  }
+
+  // If user requests more than remaining in current cycle, we only give what's left
+  const takeN = Math.min(count, remaining.length);
+
+  // Shuffle remaining each quiz start if user checked random order
+  if(shuffle) fisherYates(remaining);
+
+  const chosenUids = remaining.slice(0, takeN);
+  const chosenSet = new Set(chosenUids);
+
+  // Persist leftover for next quiz
+  const leftover = remaining.filter(uid => !chosenSet.has(uid));
+  saveCycle(qtype, leftover);
+
+  // Map uid -> question
+  const byUid = new Map(pool.map(q => [q.uid, q]));
+  const chosen = chosenUids.map(uid => byUid.get(uid)).filter(Boolean);
+
+  // Keep option order stable (do NOT shuffle options).
+  return chosen.map(q => ({
+    ...q,
+    options: (q.options || []).map(o => ({...o})),
+    answer: (q.answer || []).slice(),
+  }));
+}
+
+function resetCycleAll(){
+  try{
+    for(const qt of ['all','single','multi']){
+      localStorage.removeItem(CYCLE_KEY_PREFIX + qt);
+      localStorage.removeItem(CYCLE_META_KEY_PREFIX + qt);
+    }
+  }catch(_e){}
+}
+
 function pickQuestionsFrom(basePool, {count, qtype, shuffle}){
   let pool = basePool || [];
   if(qtype !== 'all') pool = pool.filter(q => q.type === qtype);
@@ -285,7 +393,16 @@ function wire(){
       state.count = count;
 
       try{
-        QUIZ = pickQuestionsFrom(pool, {count, qtype, shuffle});
+        // Normal mode: enforce non-repeating cycle until all questions are covered.
+        if(pool === BANK){
+          QUIZ = pickQuestionsNonRepeating(pool, {count, qtype, shuffle});
+          if(QUIZ.length < count){
+            alert(`本轮题库剩余 ${QUIZ.length} 题，已自动调整本次出题数量。做完本轮后会自动开启下一轮（题目将再次随机）。`);
+            state.count = QUIZ.length;
+          }
+        }else{
+          QUIZ = pickQuestionsFrom(pool, {count, qtype, shuffle});
+        }
       }catch(e){
         alert(e.message || String(e));
         return;
@@ -306,7 +423,84 @@ function wire(){
       const wrongSet = loadWrongSet();
       if(wrongSet.size === 0){
         alert('错题集为空。\n\n提示：做完一套测试后，做错/未作答的题会自动加入错题集。');
+    
+    $('exportWrongBtn')?.addEventListener('click', () => {
+      if(!ensureBankLoaded()) return;
+      const wrongSet = loadWrongSet();
+      if(wrongSet.size === 0){
+        alert('错题集为空，无需导出。');
+        return;
+      }
+      const payload = {
+        version: 1,
+        exportedAt: new Date().toISOString(),
+        uids: Array.from(wrongSet),
+      };
+      const blob = new Blob([JSON.stringify(payload, null, 2)], {type: 'application/json'});
+      const a = document.createElement('a');
+      const ts = new Date().toISOString().slice(0,19).replace(/[:T]/g,'-');
+      a.href = URL.createObjectURL(blob);
+      a.download = `uniheal_wrongset_${ts}.json`;
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => {
+        URL.revokeObjectURL(a.href);
+        a.remove();
+      }, 200);
+    });
+
+    const importFile = $('importFile');
+    $('importWrongBtn')?.addEventListener('click', () => {
+      if(!importFile){
+        alert('未找到导入文件控件（importFile）。');
+        return;
+      }
+      importFile.value = '';
+      importFile.click();
+    });
+
+    importFile?.addEventListener('change', async (ev) => {
+      if(!ensureBankLoaded()) return;
+      const file = ev.target.files && ev.target.files[0];
+      if(!file) return;
+      try{
+        const txt = await file.text();
+        const data = JSON.parse(txt);
+        const uids = Array.isArray(data) ? data : (Array.isArray(data?.uids) ? data.uids : []);
+        if(!Array.isArray(uids) || uids.length === 0){
+          alert('导入失败：文件中没有找到有效的 uids 列表。');
+          return;
+        }
+        const bankSet = new Set(BANK.map(q => q.uid));
+        const merged = loadWrongSet();
+        let added = 0;
+        for(const uid of uids){
+          if(bankSet.has(uid) && !merged.has(uid)){
+            merged.add(uid);
+            added++;
+          }
+        }
+        saveWrongSet(merged);
         updateWrongUI();
+        alert(`导入完成：新增 ${added} 条错题；当前错题集共 ${merged.size} 条。`);
+      }catch(e){
+        alert('导入失败：' + (e.message || String(e)));
+      }
+    });
+
+    $('resetCycleBtn')?.addEventListener('click', () => {
+      if(!ensureBankLoaded()) return;
+      const qtype = $('qtype').value;
+      const key = CYCLE_KEY_PREFIX + qtype;
+      const metaKey = CYCLE_META_KEY_PREFIX + qtype;
+      if(confirm('确定要重置本题型的“覆盖进度”吗？\n\n重置后：下一次开始测试会从完整题库重新开始覆盖一轮（仍然随机）。')){
+        try{ localStorage.removeItem(key); }catch(_e){}
+        try{ localStorage.removeItem(metaKey); }catch(_e){}
+        alert('已重置覆盖进度。');
+      }
+    });
+
+    updateWrongUI();
         return;
       }
       const pool = BANK.filter(q => wrongSet.has(q.uid));

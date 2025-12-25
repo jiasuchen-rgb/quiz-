@@ -43,6 +43,9 @@
         <button id="startBtn" class="primary">开始测试</button>
         <button id="wrongBtn">错题集（0）</button>
         <button id="clearWrongBtn" title="清空本机浏览器保存的错题记录">清空错题</button>
+        <button id="exportWrongBtn" title="导出错题集为文件，方便备份/换设备">导出错题</button>
+        <button id="importWrongBtn" title="从导出的文件导入错题集">导入错题</button>
+        <button id="resetCycleBtn" title="清空本题型的“不重复出题”进度，从头覆盖一轮">重置覆盖进度</button>
       </div>
       <p class="note">
         说明：多选题需要把所有正确选项选全才算对；不会因为多选错选而“部分得分”。
@@ -97,5 +100,6 @@
   </footer>
 
   <script src="script.js"></script>
+  <input id="importFile" type="file" accept="application/json" class="hidden" />
 </body>
 </html>
